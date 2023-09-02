@@ -1,0 +1,358 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Thu Aug 31 22:29:21 2023
+
+@author: Andrey
+"""
+
+# THe code is to test riskfolio library and use various portfolio optimization techniques to build an optimum portfolio
+
+
+import numpy as np
+import pandas as pd
+import math
+import datetime as dt
+import matplotlib
+import quantstats as qs
+from dateutil.relativedelta import relativedelta
+from dateutil import parser
+import xlrd
+from IPython.core.display import display, HTML
+import urllib.request
+import warnings
+import yfinance as yf
+import urllib.request
+import copy
+import riskfolio
+from riskfolio import Portfolio as pf
+from yfinance_data_downloader import pull_data
+import matplotlib.pyplot as plt
+
+def optimal_portfolio(tickrers):
+    warnings.filterwarnings("ignore")
+    yf.pdr_override()
+    pd.options.display.float_format = '{:.4%}'.format
+
+    # Date range
+    start = '2016-01-01'
+    end = '2023-08-31'
+
+    # Tickers of assets
+    assets = ['JCI', 'TGT', 'CMCSA', 'CPB', 'MO', 'APA', 'MMC', 'JPM',
+              'ZION', 'BAX', 'BMY', 'LUV', 'PCAR', 'TXT', 'TMO',
+              'DE', 'MSFT', 'TSLA', 'NVDA', 'HPQ', 'SEE', 'VZ', 'CNP', 'NI', 'T', 'BA']
+    assets.sort()
+
+    # Downloading data
+    data = yf.download(assets, start = start, end = end)
+    data = data.loc[:,('Adj Close', slice(None))]
+    data.columns = assets
+    # Calculating returns
+    Y = data[assets].pct_change().dropna()
+    display(Y.head())
+    
+    # Building the portfolio object
+    port = pf(returns=Y)
+    # Select method and estimate input parameters:
+    # Method to estimate expected returns based on historical data
+    method_mu='hist'
+    # Method to estimate covariance matrix based on historical data
+    method_cov='hist' 
+    # Estimate mean and covariance based on historical data
+    port.assets_stats(method_mu=method_mu, method_cov=method_cov, d=0.94)
+    
+    # Estimate optimal portfolio:
+
+    model='Classic' # Could be Classic(historical), BL(Black Litterman), FM(Factor Model) or BL_FM(Black litterman with factors)
+    rm = 'MV' # Risk measure used, there are 13 available risk measures
+    obj = 'Sharpe' # Objective function, could be MinRisk, MaxRet, Utility or Sharpe
+    hist = True # Use historical scenarios for risk measures that depend on scenarios
+    rf = 0 # Risk free rate
+    l = 0 # Risk aversion factor, only useful when obj is 'Utility'
+
+    w = port.optimization(model=model, rm=rm, obj=obj, rf=rf, l=l, hist=hist)
+    display(w.T)
+    
+    # Plotting the composition of the portfolio
+    ax = riskfolio.PlotFunctions.plot_pie(w=w, title='Sharpe Mean Variance', others=0.05, nrow=25, cmap = "tab20", height=6, width=10, ax=None)
+    
+    
+    # Efficient frontier
+    points = 50 # Number of points of the frontier
+    frontier = port.efficient_frontier(model=model, rm=rm, points=points, rf=rf, hist=hist)
+    display(frontier.T.head())
+    
+    # Plotting the efficient frontier
+    label = 'Max Risk Adjusted Return Portfolio' # Title of plot
+    mu = port.mu # Expected returns
+    cov = port.cov # Covariance matrix
+    returns = port.returns # Returns of the assets
+
+    ax = riskfolio.PlotFunctions.plot_frontier(w_frontier=frontier, mu=mu, cov=cov, returns=returns, rm=rm, rf=rf, alpha=0.05, cmap='viridis', w=w, label=label, marker='*', s=16, c='r', height=6, width=10, ax=None)
+    
+    # Plotting efficient frontier composition
+    ax = riskfolio.PlotFunctions.plot_frontier_area(w_frontier=frontier, cmap="tab20", height=6, width=10, ax=None)
+    
+    # Risk Measures available:
+    #
+    # 'MV': Standard Deviation.
+    # 'MAD': Mean Absolute Deviation.
+    # 'MSV': Semi Standard Deviation.
+    # 'FLPM': First Lower Partial Moment (Omega Ratio).
+    # 'SLPM': Second Lower Partial Moment (Sortino Ratio).
+    # 'CVaR': Conditional Value at Risk.
+    # 'EVaR': Entropic Value at Risk.
+    # 'WR': Worst Realization (Minimax)
+    # 'MDD': Maximum Drawdown of uncompounded cumulative returns (Calmar Ratio).
+    # 'ADD': Average Drawdown of uncompounded cumulative returns.
+    # 'CDaR': Conditional Drawdown at Risk of uncompounded cumulative returns.
+    # 'EDaR': Entropic Drawdown at Risk of uncompounded cumulative returns.
+    # 'UCI': Ulcer Index of uncompounded cumulative returns.
+
+    rms = ['MV', 'MAD', 'MSV', 'FLPM', 'SLPM', 'CVaR',
+       'EVaR', 'WR', 'MDD', 'ADD', 'CDaR', 'UCI', 'EDaR']
+
+    w_s = pd.DataFrame([])
+
+    for i in rms:
+        w = port.optimization(model=model, rm=i, obj=obj, rf=rf, l=l, hist=hist)
+        w_s = pd.concat([w_s, w], axis=1)
+    
+    w_s.columns = rms
+    w_s.style.format("{:.2%}").background_gradient(cmap='YlGn')
+    
+    # Plotting a comparison of assets weights for each portfolio
+    fig = plt.gcf()
+    fig.set_figwidth(14)
+    fig.set_figheight(6)
+    ax = fig.subplots(nrows=1, ncols=1)
+    w_s.plot.bar(ax=ax)
+    
+    return
+
+
+def hrp_portfolio(tickers):    
+    warnings.filterwarnings("ignore")
+    pd.options.display.float_format = '{:.4%}'.format
+
+    # Date range
+    start = '2016-01-01'
+    end = '2023-08-31'
+
+    # Tickers of assets
+    assets = ['JCI', 'TGT', 'CMCSA', 'CPB', 'MO', 'APA', 'MMC', 'JPM',
+              'ZION', 'PSA', 'BAX', 'BMY', 'LUV', 'PCAR', 'TXT', 'TMO',
+              'DE', 'MSFT', 'HPQ', 'SEE', 'VZ', 'CNP', 'NI', 'T', 'BA', 'TSLA', 'NVDA']
+    assets.sort()
+
+    # Downloading data
+    data = yf.download(assets, start = start, end = end)
+    data = data.loc[:,('Adj Close', slice(None))]
+    data.columns = assets
+    # Calculating returns
+    Y = data[assets].pct_change().dropna()
+    display(Y.head())
+    
+    # Plotting Assets Clusters
+    ax = riskfolio.plot_dendrogram(returns=Y,
+                        codependence='pearson',
+                        linkage='single',
+                        k=None,
+                        max_k=10,
+                        leaf_order=True,
+                        ax=None)
+    
+    # Building the portfolio object
+    port = riskfolio.HCPortfolio(returns=Y)
+
+    # Estimate optimal portfolio:
+    model='HRP' # Could be HRP or HERC
+    codependence = 'pearson' # Correlation matrix used to group assets in clusters
+    rm = 'MV' # Risk measure used, this time will be variance
+    rf = 0 # Risk free rate
+    linkage = 'single' # Linkage method used to build clusters
+    max_k = 10 # Max number of clusters used in two difference gap statistic, only for HERC model
+    leaf_order = True # Consider optimal order of leafs in dendrogram
+    
+    w = port.optimization(model=model,
+                      codependence=codependence,
+                      rm=rm,
+                      rf=rf,
+                      linkage=linkage,
+                      max_k=max_k,
+                      leaf_order=leaf_order)
+    display(w.T)
+    
+    
+    # Plotting the composition of the portfolio
+    ax = riskfolio.plot_pie(w=w,
+                 title='HRP Naive Risk Parity',
+                 others=0.05,
+                 nrow=25,
+                 cmap="tab20",
+                 height=8,
+                 width=10,
+                 ax=None)
+    
+    # Plotting the risk contribution per asset
+    mu = Y.mean()
+    cov = Y.cov() # Covariance matrix
+    returns = Y # Returns of the assets
+
+    ax = riskfolio.plot_risk_con(w=w,
+                      cov=cov,
+                      returns=returns,
+                      rm=rm,
+                      rf=0,
+                      alpha=0.05,
+                      color="tab:blue",
+                      height=6,
+                      width=10,
+                      t_factor=252,
+                      ax=None)
+    
+    # Risk Measures available:
+    #
+    # 'vol': Standard Deviation.
+    # 'MV': Variance.
+    # 'MAD': Mean Absolute Deviation.
+    # 'MSV': Semi Standard Deviation.
+    # 'FLPM': First Lower Partial Moment (Omega Ratio).
+    # 'SLPM': Second Lower Partial Moment (Sortino Ratio).
+    # 'VaR': Conditional Value at Risk.
+    # 'CVaR': Conditional Value at Risk.
+    # 'EVaR': Entropic Value at Risk.
+    # 'WR': Worst Realization (Minimax)
+    # 'MDD': Maximum Drawdown of uncompounded cumulative returns (Calmar Ratio).
+    # 'ADD': Average Drawdown of uncompounded cumulative returns.
+    # 'DaR': Drawdown at Risk of uncompounded cumulative returns.
+    # 'CDaR': Conditional Drawdown at Risk of uncompounded cumulative returns.
+    # 'EDaR': Entropic Drawdown at Risk of uncompounded cumulative returns.
+    # 'UCI': Ulcer Index of uncompounded cumulative returns.
+    # 'MDD_Rel': Maximum Drawdown of compounded cumulative returns (Calmar Ratio).
+    # 'ADD_Rel': Average Drawdown of compounded cumulative returns.
+    # 'DaR_Rel': Drawdown at Risk of compounded cumulative returns.
+    # 'CDaR_Rel': Conditional Drawdown at Risk of compounded cumulative returns.
+    # 'EDaR_Rel': Entropic Drawdown at Risk of compounded cumulative returns.
+    # 'UCI_Rel': Ulcer Index of compounded cumulative returns.
+
+    rms = ['vol', 'MV', 'MAD', 'MSV', 'FLPM', 'SLPM',
+           'VaR','CVaR', 'EVaR', 'WR', 'MDD', 'ADD',
+           'DaR', 'CDaR', 'EDaR', 'UCI', 'MDD_Rel', 'ADD_Rel',
+           'DaR_Rel', 'CDaR_Rel', 'EDaR_Rel', 'UCI_Rel']
+
+    w_s = pd.DataFrame([])
+    correlation = 'pearson'
+    
+    for i in rms:
+        w = port.optimization(model=model,
+                          correlation=correlation,
+                          rm=i,
+                          rf=rf,
+                          linkage=linkage,
+                          max_k=max_k,
+                          leaf_order=leaf_order)
+
+        w_s = pd.concat([w_s, w], axis=1)
+    
+    w_s.columns = rms
+    w_s.style.format("{:.2%}").background_gradient(cmap='YlGn')
+    
+    # Plotting a comparison of assets weights for each portfolio
+    fig = plt.gcf()
+    fig.set_figwidth(14)
+    fig.set_figheight(6)
+    ax = fig.subplots(nrows=1, ncols=1)
+    w_s.plot.bar(ax=ax)
+    
+    return w_s
+
+
+def herc_optimization(tickers):
+    warnings.filterwarnings("ignore")
+
+    yf.pdr_override()
+    pd.options.display.float_format = '{:.4%}'.format
+
+    # Date range
+    start = '2016-01-01'
+    end = '2023-08-31'
+
+    # Tickers of assets
+    assets = ['JCI', 'TGT', 'CMCSA', 'CPB', 'MO', 'APA', 'MMC', 'JPM',
+              'ZION', 'PSA', 'BAX', 'BMY', 'LUV', 'PCAR', 'TXT', 'TMO',
+              'DE', 'MSFT', 'HPQ', 'SEE', 'VZ', 'CNP', 'NI', 'T', 'BA', 'TSLA', 'NVDA']
+    assets.sort()
+
+    # Downloading data
+    data = yf.download(assets, start = start, end = end)
+    data = data.loc[:,('Adj Close', slice(None))]
+    data.columns = assets
+    # Calculating returns
+    Y = data[assets].pct_change().dropna()
+    
+    display(Y.head())
+    
+    # Plotting Assets Clusters
+    ax = riskfolio.PlotFunctions.plot_clusters(returns=Y,
+                       #correlation='pearson',
+                       linkage='ward',
+                       k=None,
+                       max_k=10,
+                       leaf_order=True,
+                       dendrogram=True,
+                       linecolor='tab:purple',
+                       ax=None)
+
+    import riskfolio.HCPortfolio as hc
+
+    # Building the portfolio object
+    port = riskfolio.HCPortfolio(returns=Y)
+
+    # Estimate optimal portfolio:
+
+    model='HERC' # Could be HRP or HERC
+    correlation = 'pearson' # Correlation matrix used to group assets in clusters
+    rm = 'MV' # Risk measure used, this time will be variance
+    rf = 0 # Risk free rate
+    linkage = 'ward' # Linkage method used to build clusters
+    max_k = 10 # Max number of clusters used in two difference gap statistic
+    leaf_order = True # Consider optimal order of leafs in dendrogram
+
+    w = port.optimization(model=model,
+                          correlation=correlation,
+                          rm=rm,
+                          rf=rf,
+                          linkage=linkage,
+                          max_k=max_k,
+                          leaf_order=leaf_order)
+
+    display(w.T)
+    
+    # Plotting the composition of the portfolio
+    ax = riskfolio.plot_pie(w=w,
+                      title='HERC Naive Risk Parity',
+                      others=0.05,
+                      nrow=25,
+                      cmap="tab20",
+                      height=8,
+                      width=10,
+                      ax=None)
+    
+    # Plotting the risk contribution per asset
+
+    mu = Y.mean()
+    cov = Y.cov() # Covariance matrix
+    returns = Y # Returns of the assets
+
+    ax = riskfolio.plot_risk_con(w=w,
+                           cov=cov,
+                           returns=returns,
+                           rm=rm,
+                           rf=0,
+                           alpha=0.05,
+                           color="tab:blue",
+                           height=6,
+                           width=10,
+                           t_factor=252,
+                           ax=None)
